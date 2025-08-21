@@ -394,6 +394,8 @@ LEGACY_PASS(PerformanceConstantPropagation, "performance-constant-propagation",
      "Constant Propagation for Performance without Diagnostics")
 LEGACY_PASS(PerformanceDiagnostics, "performance-diagnostics",
      "Constant Propagation for Performance without Diagnostics")
+LEGACY_PASS(DatalogDiagnostics, "datalog-diagnostics",
+            "Diagnose problems via datalog")
 LEGACY_PASS(PredictableDeadAllocationElimination, "predictable-deadalloc-elim",
      "Eliminate dead temporary allocations after diagnostics")
 LEGACY_PASS(RedundantPhiElimination, "redundant-phi-elimination",

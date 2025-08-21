@@ -1,0 +1,79 @@
+.type loan <: unsigned
+.type origin <: unsigned
+.type location <: unsigned
+.type function <: symbol
+
+.type programPoint <: unsigned
+.type context <: symbol
+
+// IR
+
+// Lifetime facts
+.decl Issue(l: loan, o: origin, loc: location, point: programPoint, c: context)
+.input Issue
+.decl Expire(l: loan, loc: location, point: programPoint, c: context)
+.input Expire
+.decl Assign(src: origin, dest: origin, c: context)
+.input Assign
+.decl Return(callerLoan: loan, callerOrigin: origin, callerContext: context, calleeOrigin: origin, calleeContext: context)
+.input Return
+.decl Use(o: origin, loc: location, point: programPoint, c: context)
+.input Use
+.decl Deallocate(o: origin, loc: location, p: programPoint, c: context)
+.input Deallocate
+.decl Pass(callerOrigin: origin, callerContext: context, calleeLoan: loan, calleeOrigin: origin, calleeContext: context)
+.input Pass
+
+// TODO: ways to pass origins/loans between contexts or globally unique loan/origin IDs.
+
+// Control flow structure
+.decl Edge(from: programPoint, to: programPoint, c: context)
+.input Edge
+
+// Computed relations
+
+.decl LoansAtOrigin(l: loan, o: origin, c: context)
+.output LoansAtOrigin
+LoansAtOrigin(l, o, c) :- Issue(l, o, _, _, c).
+LoansAtOrigin(l, o2, c) :- LoansAtOrigin(l, o1, c), Assign(o1, o2, c).
+// Return from callee
+LoansAtOrigin(callerLoan, callerOrigin, callerContext) :-
+  LoansAtOrigin(_, calleeReturnOrigin, calleeContext),
+  Return(callerLoan, callerOrigin, callerContext, calleeReturnOrigin, calleeContext).
+// Pass to callee
+LoansAtOrigin(calleeLoan, calleeOrigin, calleeContext) :-
+  LoansAtOrigin(_, callerOrigin, callerContext),
+  Pass(callerOrigin, callerContext, calleeLoan, calleeOrigin, calleeContext).
+
+.decl ExpiredLoanAt(l: loan, p: programPoint, c: context)
+.output ExpiredLoanAt
+ExpiredLoanAt(l, p, c) :- Expire(l, _, p, c).
+ExpiredLoanAt(l, p2, c) :- ExpiredLoanAt(l, p1, c), Edge(p1, p2, c), !Issue(l, _, _, p2, c).
+// Manual memory management
+ExpiredLoanAt(l, p, c) :- Deallocate(o, _, p, c), LoansAtOrigin(l, o, c).
+
+// Output
+.decl UseDefaulted(useLoc: location, usePoint: programPoint,
+                   expireLoc: location, expirePoint: programPoint,
+                   issueLoc: location, issuePoint: programPoint)
+.output UseDefaulted
+UseDefaulted(useLoc, usePoint, expireLoc, expirePoint, issueLoc, issuePoint) :- 
+  ExpiredLoanAt(l, usePoint, c), Use(o, useLoc, usePoint, c), LoansAtOrigin(l, o, c),
+  Issue(l, _, issueLoc, issuePoint, c), Expire(l, expireLoc, expirePoint, c).
+
+// Manual memory management
+UseDefaulted(useLoc, usePoint, expireLoc, expirePoint, issueLoc, issuePoint) :- 
+  ExpiredLoanAt(l, usePoint, c), Use(o, useLoc, usePoint, c), LoansAtOrigin(l, o, c),
+  Issue(l, _, issueLoc, issuePoint, c), Deallocate(o2, expireLoc, expirePoint, c), LoansAtOrigin(l, o2, c).
+
+// Returned from callee
+UseDefaulted(useLoc, usePoint, expireLoc, expirePoint, issueLoc, issuePoint) :- 
+  ExpiredLoanAt(callerLoan, usePoint, callerContext), Use(callerOrigin, useLoc, usePoint, callerContext), LoansAtOrigin(callerLoan, callerOrigin, callerContext),
+  Deallocate(callerOrigin2, expireLoc, expirePoint, callerContext), LoansAtOrigin(callerLoan, callerOrigin2, callerContext),
+  Issue(calleeLoan, _, issueLoc, issuePoint, calleeContext), Return(callerLoan, _, callerContext, calleeOrigin, calleeContext), LoansAtOrigin(calleeLoan, calleeOrigin, calleeContext).
+
+// Freed in callee
+UseDefaulted(useLoc, usePoint, expireLoc, expirePoint, issueLoc, issuePoint) :- 
+  ExpiredLoanAt(calleeLoan, _, calleeContext), Use(callerOrigin, useLoc, usePoint, callerContext), LoansAtOrigin(callerLoan, callerOrigin, callerContext),
+  Issue(callerLoan, _, issueLoc, issuePoint, callerContext), Deallocate(calleeOrigin, expireLoc, expirePoint, calleeContext),
+  LoansAtOrigin(calleeLoan, calleeOrigin, calleeContext), Pass(callerOrigin, callerContext, calleeLoan, _, calleeContext).

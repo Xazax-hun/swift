@@ -70,7 +70,8 @@ add_swift_host_tool(swift-frontend
 target_link_libraries(swift-frontend
                       PUBLIC
                         swiftDriverTool
-                        swiftCompilerModules)
+                        swiftCompilerModules
+                        datalogLib)
 
 add_swift_parser_link_libraries(swift-frontend)
 
