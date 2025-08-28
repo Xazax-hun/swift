@@ -1203,7 +1203,7 @@ ERROR(noncopyable_shared_case_block_unimplemented, none,
 WARNING(lifetime_use_after_free, none, "value used after its lifetime ended",
         ())
 NOTE(lifetime_ended_here, none, "lifetime ended here", ())
-NOTE(lifetime_created_here, none, "value borrowed here", ())
+NOTE(lifetime_created_here, none, "lifetime started here", ())
 
 #define UNDEFINE_DIAGNOSTIC_MACROS
 #include "DefineDiagnosticMacros.h"

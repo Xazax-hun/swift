@@ -15,16 +15,14 @@
 .input Expire
 .decl Assign(src: origin, dest: origin, c: context)
 .input Assign
-.decl Return(callerLoan: loan, callerOrigin: origin, callerContext: context, calleeOrigin: origin, calleeContext: context)
+.decl Return(callerLoan: loan, callerOrigin: origin, callerPoint: programPoint, callerContext: context, calleeOrigin: origin, calleeContext: context)
 .input Return
 .decl Use(o: origin, loc: location, point: programPoint, c: context)
 .input Use
 .decl Deallocate(o: origin, loc: location, p: programPoint, c: context)
 .input Deallocate
-.decl Pass(callerOrigin: origin, callerContext: context, calleeLoan: loan, calleeOrigin: origin, calleeContext: context)
+.decl Pass(callerOrigin: origin, callerPoint: programPoint, callerContext: context, calleeLoan: loan, calleeOrigin: origin, calleeContext: context)
 .input Pass
-
-// TODO: ways to pass origins/loans between contexts or globally unique loan/origin IDs.
 
 // Control flow structure
 .decl Edge(from: programPoint, to: programPoint, c: context)
@@ -35,15 +33,37 @@
 .decl LoansAtOrigin(l: loan, o: origin, c: context)
 .output LoansAtOrigin
 LoansAtOrigin(l, o, c) :- Issue(l, o, _, _, c).
+LoansAtOrigin(l, o, c) :- Return(l, o, _, c, _, _).
+LoansAtOrigin(l, o, c) :- Pass(_, _, _, l, o, c).
 LoansAtOrigin(l, o2, c) :- LoansAtOrigin(l, o1, c), Assign(o1, o2, c).
-// Return from callee
-LoansAtOrigin(callerLoan, callerOrigin, callerContext) :-
-  LoansAtOrigin(_, calleeReturnOrigin, calleeContext),
-  Return(callerLoan, callerOrigin, callerContext, calleeReturnOrigin, calleeContext).
-// Pass to callee
-LoansAtOrigin(calleeLoan, calleeOrigin, calleeContext) :-
-  LoansAtOrigin(_, callerOrigin, callerContext),
-  Pass(callerOrigin, callerContext, calleeLoan, calleeOrigin, calleeContext).
+
+.decl LoansPassed(fromLoan: loan, fromContext: context, toLoan: loan, toContext: context)
+.output LoansPassed
+// Base
+LoansPassed(callerLoan, callerContext, callerLoan, callerContext) :- 
+  Issue(callerLoan, _, _, _, callerContext).
+LoansPassed(callerLoan, callerContext, callerLoan, callerContext) :- 
+  Return(callerLoan, _, _, callerContext, _, _).
+LoansPassed(calleeLoan, calleeContext, calleeLoan, calleeContext) :- 
+  Pass(_, _, _, calleeLoan, _, calleeContext).
+// Pass directly
+LoansPassed(callerLoan, callerContext, calleeLoan, calleeContext) :-
+  LoansAtOrigin(callerLoan, callerOrigin, callerContext),
+  Pass(callerOrigin, _, callerContext, calleeLoan, _, calleeContext).
+LoansPassed(calleeLoan, calleeContext, callerLoan, callerContext) :-
+  LoansAtOrigin(calleeLoan, calleeReturnOrigin, calleeContext),
+  Return(callerLoan, _, _, callerContext, calleeReturnOrigin, calleeContext).
+// Transitive closure
+LoansPassed(callerLoan, callerContext, indirectCalleeLoan, indirectCalleeContext) :-
+  LoansPassed(callerLoan, callerContext, directCalleeLoan, directCalleeContext),
+  LoansPassed(directCalleeLoan, directCalleeContext, indirectCalleeLoan, indirectCalleeContext).
+
+.decl Alias(l1: loan, l2: loan, p: programPoint, c: context)
+.output Alias
+Alias(l1, l2, p, c) :- Pass(o, p, c, calleeLoan, _, calleeContext), LoansAtOrigin(l1, o, c),
+  Return(l2, _, p, c, returnOrigin, calleeContext), LoansAtOrigin(calleeLoan, returnOrigin, calleeContext).
+Alias(l1, l3, p, c) :- Alias(l1, l2, p, c), Alias(l2, l3, p, c).
+Alias(l1, l2, p, c) :- Alias(l2, l1, p, c).
 
 .decl ExpiredLoanAt(l: loan, p: programPoint, c: context)
 .output ExpiredLoanAt
@@ -51,6 +71,10 @@ ExpiredLoanAt(l, p, c) :- Expire(l, _, p, c).
 ExpiredLoanAt(l, p2, c) :- ExpiredLoanAt(l, p1, c), Edge(p1, p2, c), !Issue(l, _, _, p2, c).
 // Manual memory management
 ExpiredLoanAt(l, p, c) :- Deallocate(o, _, p, c), LoansAtOrigin(l, o, c).
+// Expired in a function call
+ExpiredLoanAt(l, p, callerContext) :-  Pass(o, p, callerContext, calleeLoan, _, calleeContext), LoansAtOrigin(l, o, callerContext),
+  ExpiredLoanAt(calleeLoan, _, calleeContext).
+ExpiredLoanAt(l, p, c) :- ExpiredLoanAt(alias, p, c), Alias(alias, l, p, c).
 
 // Output
 .decl UseDefaulted(useLoc: location, usePoint: programPoint,
@@ -63,17 +87,7 @@ UseDefaulted(useLoc, usePoint, expireLoc, expirePoint, issueLoc, issuePoint) :-
 
 // Manual memory management
 UseDefaulted(useLoc, usePoint, expireLoc, expirePoint, issueLoc, issuePoint) :- 
-  ExpiredLoanAt(l, usePoint, c), Use(o, useLoc, usePoint, c), LoansAtOrigin(l, o, c),
-  Issue(l, _, issueLoc, issuePoint, c), Deallocate(o2, expireLoc, expirePoint, c), LoansAtOrigin(l, o2, c).
-
-// Returned from callee
-UseDefaulted(useLoc, usePoint, expireLoc, expirePoint, issueLoc, issuePoint) :- 
-  ExpiredLoanAt(callerLoan, usePoint, callerContext), Use(callerOrigin, useLoc, usePoint, callerContext), LoansAtOrigin(callerLoan, callerOrigin, callerContext),
-  Deallocate(callerOrigin2, expireLoc, expirePoint, callerContext), LoansAtOrigin(callerLoan, callerOrigin2, callerContext),
-  Issue(calleeLoan, _, issueLoc, issuePoint, calleeContext), Return(callerLoan, _, callerContext, calleeOrigin, calleeContext), LoansAtOrigin(calleeLoan, calleeOrigin, calleeContext).
-
-// Freed in callee
-UseDefaulted(useLoc, usePoint, expireLoc, expirePoint, issueLoc, issuePoint) :- 
-  ExpiredLoanAt(calleeLoan, _, calleeContext), Use(callerOrigin, useLoc, usePoint, callerContext), LoansAtOrigin(callerLoan, callerOrigin, callerContext),
-  Issue(callerLoan, _, issueLoc, issuePoint, callerContext), Deallocate(calleeOrigin, expireLoc, expirePoint, calleeContext),
-  LoansAtOrigin(calleeLoan, calleeOrigin, calleeContext), Pass(callerOrigin, callerContext, calleeLoan, _, calleeContext).
+  Issue(issueLoan, _, issueLoc, issuePoint, issueContext), LoansPassed(issueLoan, issueContext, deallocLoan, deallocContext),
+  Deallocate(o2, expireLoc, expirePoint, deallocContext), LoansAtOrigin(deallocLoan, o2, deallocContext),
+  LoansPassed(issueLoan, issueContext, usedLoan, usedContext),
+  Use(o, useLoc, usePoint, usedContext), LoansAtOrigin(usedLoan, o, usedContext), ExpiredLoanAt(usedLoan, usePoint, usedContext).

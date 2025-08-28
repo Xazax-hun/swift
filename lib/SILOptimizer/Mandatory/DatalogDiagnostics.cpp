@@ -49,6 +49,7 @@ struct CalleeInfo {
 struct CallerInfo {
   SILFunction &caller;
   SILFunction &callee;
+  unsigned blockID;
   std::map<unsigned, unsigned> argIdxToOrigin;
   std::optional<OriginAndLoan> returnOriginAndLoan;
 };
@@ -97,6 +98,7 @@ private:
                                      const std::string &caller,
                                      unsigned callerReturnOrigin,
                                      unsigned callerNewLoan,
+                                     unsigned callerBlockId,
                                      llvm::ArrayRef<Operand> callerOperands) {
     ASTContext& ctx = getModule()->getASTContext();
     clang::AnalysisDeclContext AC(nullptr, FD);
@@ -142,7 +144,7 @@ private:
         assignRelation->insert(assign);
       } else if (auto returnOriginFact = fact->getAs<clang::lifetimes::internal::ReturnOfOriginFact>()) {
         souffle::tuple ret(returnRelation);
-        ret << callerNewLoan << callerReturnOrigin << caller
+        ret << callerNewLoan << callerReturnOrigin << callerBlockId << caller
             << returnOriginFact->getReturnedOriginID().Value << name;
         returnRelation->insert(ret);
       } else if (auto passFact =
@@ -156,8 +158,9 @@ private:
           if (!originID)
             continue;
           souffle::tuple pass(passRelation);
-          pass << *originID << caller << passFact->getLoanID().Value
-               << passFact->getOriginID().Value << name;
+          pass << *originID << callerBlockId << caller
+               << passFact->getLoanID().Value << passFact->getOriginID().Value
+               << name;
           passRelation->insert(pass);
           break;
         }
@@ -224,15 +227,11 @@ private:
           continue;
         auto location = inst.getLoc().getSourceLoc();
         if (auto returnInst = dyn_cast<ReturnInst>(&inst)) {
-          for (auto resultTy : returnInst->getResultTypes()) {
-            if (isTrackedType(resultTy)) {
-              hadPointerArgOrResult = true;
-              info.returnOrigins.push_back(
-                  getNextSwiftOriginID(returnInst->getOperand()));
-            }
-            break; // FIXME: support multiple return values
-          }
-          continue;
+          auto originID = getOriginID(returnInst->getOperand());
+          if (!originID)
+            break;
+          hadPointerArgOrResult = true;
+          info.returnOrigins.push_back(*originID);
         }
         if (auto fas = FullApplySite::isa(&inst)) {
           SILFunction *callee = fas.getCalleeFunction();
@@ -244,7 +243,8 @@ private:
                 auto result = fas->getResult(0);
                 collectFactsFromClangFunction(
                     prog, FD, name, getNextSwiftOriginID(result),
-                    getNextSwiftLoanID(), inst.getAllOperands());
+                    getNextSwiftLoanID(), block.getDebugID(),
+                    inst.getAllOperands());
               }
             }
             continue;
@@ -274,7 +274,8 @@ private:
               } else {
                 if (callee->empty())
                   continue;
-                CallerInfo info{function, *callee};
+                CallerInfo info{function, *callee,
+                                (unsigned)block.getDebugID()};
                 for (auto [idx, value] : llvm::enumerate(fas.getArguments())) {
                   if (!isTrackedType(value->getType()))
                     continue;
@@ -332,16 +333,16 @@ private:
         if (callerOriginIt == caller.argIdxToOrigin.end())
           continue;
         souffle::tuple pass(passRelation);
-        pass << callerOriginIt->second << caller.caller.getName().str()
-             << OriginAndLoan.loan << OriginAndLoan.origin
-             << caller.callee.getName().str();
+        pass << callerOriginIt->second << caller.blockID
+             << caller.caller.getName().str() << OriginAndLoan.loan
+             << OriginAndLoan.origin << caller.callee.getName().str();
         passRelation->insert(pass);
       }
       if (caller.returnOriginAndLoan) {
         for (auto returnOriginInCallee : callee.returnOrigins) {
           souffle::tuple ret(returnRelation);
           ret << caller.returnOriginAndLoan->loan
-              << caller.returnOriginAndLoan->origin
+              << caller.returnOriginAndLoan->origin << caller.blockID
               << caller.caller.getName().str() << returnOriginInCallee
               << caller.callee.getName().str();
           returnRelation->insert(ret);
