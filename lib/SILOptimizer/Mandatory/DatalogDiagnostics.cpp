@@ -384,8 +384,8 @@ private:
       passRelation = prog->getRelation("Pass");
       collectFacts(prog);
       prog->run();
-      prog->dumpInputs();
-      prog->dumpOutputs();
+      // prog->dumpInputs();
+      // prog->dumpOutputs();
       processClangOutput(prog);
       delete prog;
     }
