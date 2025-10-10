@@ -35,6 +35,7 @@
 #include "swift/AST/DistributedDecl.h"
 #include "swift/AST/ExistentialLayout.h"
 #include "swift/AST/Expr.h"
+#include "swift/AST/ExtInfo.h"
 #include "swift/AST/ForeignErrorConvention.h"
 #include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/InFlightSubstitution.h"
@@ -630,11 +631,13 @@ namespace {
     Expr *SubExpr;
     std::optional<Conversion::KindTy> Kind;
     unsigned MaxOptionalDepth;
+    const clang::Type *clangType;
 
     BridgingConversion() : SubExpr(nullptr) {}
     BridgingConversion(Expr *sub, std::optional<Conversion::KindTy> kind,
-                       unsigned depth)
-        : SubExpr(sub), Kind(kind), MaxOptionalDepth(depth) {
+                       unsigned depth, const clang::Type *clangType = nullptr)
+        : SubExpr(sub), Kind(kind), MaxOptionalDepth(depth),
+          clangType(clangType) {
       assert(!kind || Conversion::isBridgingKind(*kind));
     }
 
@@ -651,6 +654,20 @@ static BridgingConversion getBridgingConversion(Expr *E) {
   }
   if (auto bridge = dyn_cast<BridgeFromObjCExpr>(E)) {
     return { bridge->getSubExpr(), Conversion::BridgeFromObjC, 0 };
+  }
+  if (auto conversion = dyn_cast<FunctionConversionExpr>(E)) {
+    auto subExpr = conversion->getSubExpr();
+    auto convType = conversion->getType()->getAs<AnyFunctionType>();
+    auto clangType = convType->getExtInfo().getClangTypeInfo().getType();
+    if (clangType && clangType->isPointerType())
+      clangType = clangType->getPointeeType()
+                      .getCanonicalType()
+                      ->getUnqualifiedDesugaredType();
+    if (convType->getRepresentation() ==
+            FunctionTypeRepresentation::CFunctionPointer &&
+        subExpr->getType()->getAs<AnyFunctionType>()->getRepresentation() !=
+            FunctionTypeRepresentation::CFunctionPointer)
+      return {subExpr, Conversion::BridgeToObjC, 0, clangType};
   }
 
   // We can handle optional injections.
@@ -766,6 +783,13 @@ tryEmitAsBridgingConversion(SILGenFunction &SGF, Expr *E, bool isExplicit,
   auto subExpr = result.SubExpr;
 
   CanType resultType = E->getType()->getCanonicalType();
+  AbstractionPattern inputType(subExpr->getType());
+  if (result.clangType)
+    inputType = AbstractionPattern(subExpr->getType()->getCanonicalType(),
+                                   result.clangType);
+  // TODO: try loweing result type while clang type is still there?
+  E->getType()->dump();
+  SGF.getLoweredType(resultType).dump();
   Conversion conversion = Conversion::getBridging(
       kind, subExpr->getType()->getCanonicalType(), resultType,
       SGF.getLoweredType(resultType), AbstractionPattern(subExpr->getType()),
@@ -1760,6 +1784,20 @@ static ManagedValue emitAnyClosureExpr(SILGenFunction &SGF, Expr *e,
   }
 }
 
+static const clang::Type *getFunctionConversionExprDestinationClangType(
+    const FunctionConversionExpr *conversionExpr) {
+  auto clangTypeInfo = conversionExpr->getType()
+                           ->castTo<AnyFunctionType>()
+                           ->getExtInfo()
+                           .getClangTypeInfo();
+  auto destFnType = clangTypeInfo.getType();
+  if (destFnType->isPointerType())
+    destFnType = destFnType->getPointeeType()
+                     .getCanonicalType()
+                     ->getUnqualifiedDesugaredType();
+  return destFnType;
+}
+
 static ManagedValue
 convertCFunctionSignature(SILGenFunction &SGF, FunctionConversionExpr *e,
                           SILType loweredResultTy, SGFContext C,
@@ -1772,8 +1810,12 @@ convertCFunctionSignature(SILGenFunction &SGF, FunctionConversionExpr *e,
       loweredDestTy = objTy;
     else
       loweredDestTy = loweredDestOptTy;
-  } else
-    loweredDestTy = SGF.getLoweredType(destTy);
+  } else {
+    // We do not have a converting initialization coming from an assignment.
+    auto clangType = getFunctionConversionExprDestinationClangType(e);
+    loweredDestTy = SGF.getLoweredType(
+        AbstractionPattern(destTy->getCanonicalType(), clangType), destTy);
+  }
 
   ManagedValue result;
 
@@ -1860,6 +1902,10 @@ static ManagedValue emitCFunctionPointer(SILGenFunction &SGF,
         if (origParamType.isClangType())
           destFnType = origParamType.getClangType();
       }
+    } else {
+      // We do not have a converting initialization coming from an assignment.
+      destFnType =
+          getFunctionConversionExprDestinationClangType(conversionExpr);
     }
     (void)emitAnyClosureExpr(
         SGF, semanticExpr, [&](AbstractClosureExpr *closure) {

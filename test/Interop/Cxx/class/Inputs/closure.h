@@ -88,4 +88,9 @@ void cfuncConstRefStrong(void (*_Nonnull)(const ARCStrong &));
 void blockConstRefStrong(void (^_Nonnull)(const ARCStrong &));
 #endif
 
+struct CxxStruct {
+  void (*fp)(NonTrivial const &x) = nullptr;
+  void (*_Nonnull fp2)(NonTrivial const &x) = nullptr;
+};
+
 #endif // __CLOSURE__

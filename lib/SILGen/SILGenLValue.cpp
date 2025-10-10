@@ -35,12 +35,14 @@
 #include "swift/AST/PropertyWrappers.h"
 #include "swift/AST/TypeCheckRequests.h"
 #include "swift/Basic/Assertions.h"
+#include "swift/SIL/AbstractionPattern.h"
 #include "swift/SIL/Consumption.h"
 #include "swift/SIL/InstructionUtils.h"
 #include "swift/SIL/SILGenUtils.h"
 #include "swift/SIL/PrettyStackTrace.h"
 #include "swift/SIL/SILArgument.h"
 #include "swift/SIL/SILInstruction.h"
+#include "swift/SIL/SILType.h"
 #include "swift/SIL/SILUndef.h"
 #include "swift/SIL/TypeLowering.h"
 #include "llvm/ADT/STLExtras.h"
@@ -2996,7 +2998,20 @@ LValue SILGenFunction::emitLValue(Expr *e, SGFAccessKind accessKind,
   // If the final component has an abstraction change, introduce a
   // reabstraction component.
   auto substFormalType = r.getSubstFormalType();
-  auto loweredSubstType = getLoweredType(substFormalType);
+  auto origFormalType = r.getOrigFormalType();
+  SILType loweredSubstType;
+  if (origFormalType.isClangType()) {
+    auto clangType = origFormalType.getClangType();
+    if (clangType->isFunctionPointerType())
+      clangType = clangType->getPointeeType()
+                      .getCanonicalType()
+                      ->getUnqualifiedDesugaredType();
+    loweredSubstType =
+        getLoweredType(AbstractionPattern(origFormalType.getType(), clangType),
+                       substFormalType);
+  }
+  if (!loweredSubstType)
+    loweredSubstType = getLoweredType(substFormalType);
   if (r.getTypeOfRValue() != loweredSubstType.getObjectType()) {
     // Logical components always re-abstract back to the substituted
     // type.
@@ -5496,6 +5511,8 @@ void SILGenFunction::emitSemanticStore(SILLocation loc,
   }
 
   // Easy case: the types match.
+  dest->getType().getObjectType().dump();
+  rvalue->getType().getObjectType().dump();
   if (rvalue->getType().getObjectType() == dest->getType().getObjectType()) {
     assert(!silConv.useLoweredAddresses() ||
            (dest->getType().isAddressOnly(F) == rvalue->getType().isAddress()));
