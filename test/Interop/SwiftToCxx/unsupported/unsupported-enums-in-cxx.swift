@@ -28,6 +28,12 @@ public indirect enum unsupportedEnumIndirect {
     case B
 }
 
+@_expose(Cxx) // expected-error {{enum 'unsupportedEnumOptionalMetatype' can not be represented in C++ as one of its cases has an associated value with type that can't be represented in C++}}
+public enum unsupportedEnumOptionalMetatype {
+    case A
+    case B(Int.Type?)
+}
+
 @_expose(Cxx) // expected-error {{enum 'unsupportedEnumProtocolType' can not be represented in C++ as one of its cases has an associated value with type that can't be represented in C++}}
 public enum unsupportedEnumProtocolType {
     case A
@@ -53,5 +59,7 @@ public enum enumEmptyAssociatedValueList {
 // CHECK-NEXT: class unsupportedEnumIndirect { } SWIFT_UNAVAILABLE_MSG("indirect enum 'unsupportedEnumIndirect' can not yet be represented in C++");
 // CHECK-EMPTY:
 // CHECK-NEXT: class unsupportedEnumMultipleAssociatedValues { } SWIFT_UNAVAILABLE_MSG("enum 'unsupportedEnumMultipleAssociatedValues' can not yet be represented in C++ as one of its cases has multiple associated values");
+// CHECK-EMPTY:
+// CHECK-NEXT: class unsupportedEnumOptionalMetatype { } SWIFT_UNAVAILABLE_MSG("enum 'unsupportedEnumOptionalMetatype' can not be represented in C++ as one of its cases has an associated value with type that can't be represented in C++");
 // CHECK-EMPTY:
 // CHECK-NEXT: class unsupportedEnumProtocolType { } SWIFT_UNAVAILABLE_MSG("enum 'unsupportedEnumProtocolType' can not be represented in C++ as one of its cases has an associated value with type that can't be represented in C++");

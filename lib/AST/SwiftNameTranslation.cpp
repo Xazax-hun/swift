@@ -404,6 +404,10 @@ swift::cxx_translation::getDeclRepresentation(
             return {Unsupported, UnrepresentableEnumCaseTuple};
           for (const auto *param : *params) {
             auto paramType = param->getInterfaceType();
+            // Metatypes aren't supported as payloads, even when wrapped in an
+            // Optional, whose nominal would otherwise let them through.
+            if (paramType->lookThroughAllOptionalTypes()->is<AnyMetatypeType>())
+              return {Unsupported, UnrepresentableEnumCaseType};
             if (!paramType->is<GenericTypeParamType>()) {
               auto *nominal = paramType->getNominalDecl();
               if (!nominal || isa<ProtocolDecl>(nominal))
